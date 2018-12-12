@@ -42,7 +42,9 @@
 package packet
 
 import (
+	"encoding/json"
 	"fmt"
+	"net"
 	"unsafe"
 
 	. "github.com/intel-go/nff-go/common"
@@ -62,6 +64,10 @@ func init() {
 		LogFatal(Debug, err)
 	}
 }
+
+type IPv4Address uint32
+type IPv6Address [IPv6AddrLen]uint8
+type MACAddress [EtherAddrLen]uint8
 
 // TODO Add function to write user data after headers and set "data" field
 
@@ -109,40 +115,62 @@ func MACToString(mac [EtherAddrLen]uint8) string {
 
 // IPv4Hdr L3 header from DPDK: lib/librte_net/rte_ip.h
 type IPv4Hdr struct {
-	VersionIhl     uint8  // version and header length
-	TypeOfService  uint8  // type of service
-	TotalLength    uint16 // length of packet
-	PacketID       uint16 // packet ID
-	FragmentOffset uint16 // fragmentation offset
-	TimeToLive     uint8  // time to live
-	NextProtoID    uint8  // protocol ID
-	HdrChecksum    uint16 // header checksum
-	SrcAddr        uint32 // source address
-	DstAddr        uint32 // destination address
+	VersionIhl     uint8       // version and header length
+	TypeOfService  uint8       // type of service
+	TotalLength    uint16      // length of packet
+	PacketID       uint16      // packet ID
+	FragmentOffset uint16      // fragmentation offset
+	TimeToLive     uint8       // time to live
+	NextProtoID    uint8       // protocol ID
+	HdrChecksum    uint16      // header checksum
+	SrcAddr        IPv4Address // source address
+	DstAddr        IPv4Address // destination address
 }
 
-func IPv4ToString(addr uint32) string {
+func (addr IPv4Address) String() string {
 	return fmt.Sprintf("%d.%d.%d.%d", byte(addr), byte(addr>>8), byte(addr>>16), byte(addr>>24))
+}
+
+// UnmarshalJSON parses IPv4 address.
+func (out *IPv4Address) UnmarshalJSON(b []byte) error {
+	var s string
+	if err := json.Unmarshal(b, &s); err != nil {
+		return err
+	}
+
+	if ip := net.ParseIP(s); ip != nil {
+		ipv4 := ip.To4()
+		if ipv4 == nil {
+			return fmt.Errorf("Bad IPv4 address ", s)
+		}
+		*out = BytesToIPv4(ipv4[0], ipv4[1], ipv4[2], ipv4[3])
+		return nil
+	}
+	return fmt.Errorf("Failed to parse address ", s)
+}
+
+func IPv4ArrayToString(addr [IPv4AddrLen]uint8) string {
+	return fmt.Sprintf("%d.%d.%d.%d", addr[0], addr[1], addr[2], addr[3])
 }
 
 func (hdr *IPv4Hdr) String() string {
 	r0 := "    L3 protocol: IPv4\n"
-	r1 := "    IPv4 Source: " + IPv4ToString(hdr.SrcAddr) + "\n"
-	r2 := "    IPv4 Destination: " + IPv4ToString(hdr.DstAddr) + "\n"
+	r1 := "    IPv4 Source: " + hdr.SrcAddr.String() + "\n"
+	r2 := "    IPv4 Destination: " + hdr.DstAddr.String() + "\n"
 	return r0 + r1 + r2
 }
 
 // IPv6Hdr L3 header from DPDK: lib/librte_net/rte_ip.h
 type IPv6Hdr struct {
-	VtcFlow    uint32             // IP version, traffic class & flow label
-	PayloadLen uint16             // IP packet length - includes sizeof(ip_header)
-	Proto      uint8              // Protocol, next header
-	HopLimits  uint8              // Hop limits
-	SrcAddr    [IPv6AddrLen]uint8 // IP address of source host
-	DstAddr    [IPv6AddrLen]uint8 // IP address of destination host(s)
+	VtcFlow    uint32      // IP version, traffic class & flow label
+	PayloadLen uint16      // IP packet length - includes sizeof(ip_header)
+	Proto      uint8       // Protocol, next header
+	HopLimits  uint8       // Hop limits
+	SrcAddr    IPv6Address // IP address of source host
+	DstAddr    IPv6Address // IP address of destination host(s)
 }
 
-func IPv6ToString(addr [IPv6AddrLen]uint8) string {
+func (addr IPv6Address) String() string {
 	return fmt.Sprintf("[%02x%02x:%02x%02x:%02x%02x:%02x%02x:%02x%02x:%02x%02x:%02x%02x:%02x%02x]",
 		addr[0], addr[1], addr[2], addr[3],
 		addr[4], addr[5], addr[6], addr[7],
@@ -150,11 +178,29 @@ func IPv6ToString(addr [IPv6AddrLen]uint8) string {
 		addr[12], addr[13], addr[14], addr[15])
 }
 
+// UnmarshalJSON parses IPv6 address.
+func (out *IPv6Address) UnmarshalJSON(b []byte) error {
+	var s string
+	if err := json.Unmarshal(b, &s); err != nil {
+		return err
+	}
+
+	if ip := net.ParseIP(s); ip != nil {
+		ipv6 := ip.To16()
+		if ipv6 == nil {
+			return fmt.Errorf("Bad IPv6 address ", s)
+		}
+		copy((*out)[:], ipv6)
+		return nil
+	}
+	return fmt.Errorf("Failed to parse address ", s)
+}
+
 func (hdr *IPv6Hdr) String() string {
 	return fmt.Sprintf(`    L3 protocol: IPv6
     IPv6 Source: %s
     IPv6 Destination %s
-`, IPv6ToString(hdr.SrcAddr), IPv6ToString(hdr.DstAddr))
+`, hdr.SrcAddr.String(), hdr.DstAddr.String())
 }
 
 // TCPHdr L4 header from DPDK: lib/librte_net/rte_tcp.h
@@ -717,6 +763,10 @@ func SwapBytesUint32(x uint32) uint32 {
 	return ((x & 0x000000ff) << 24) | ((x & 0x0000ff00) << 8) | ((x & 0x00ff0000) >> 8) | ((x & 0xff000000) >> 24)
 }
 
+func SwapBytesIPv4Addr(x IPv4Address) IPv4Address {
+	return ((x & 0x000000ff) << 24) | ((x & 0x0000ff00) << 8) | ((x & 0x00ff0000) >> 8) | ((x & 0xff000000) >> 24)
+}
+
 // GetRawPacketBytes returns all bytes from this packet. Not zero-copy.
 func (packet *Packet) GetRawPacketBytes() []byte {
 	return low.GetRawPacketBytesMbuf(packet.CMbuf)
@@ -818,17 +868,17 @@ func (packet *Packet) PacketBytesChange(start uint, bytes []byte) bool {
 }
 
 // BytesToIPv4 converts four element address to uint32 representation
-func BytesToIPv4(a byte, b byte, c byte, d byte) uint32 {
-	return uint32(d)<<24 | uint32(c)<<16 | uint32(b)<<8 | uint32(a)
+func BytesToIPv4(a byte, b byte, c byte, d byte) IPv4Address {
+	return IPv4Address(d)<<24 | IPv4Address(c)<<16 | IPv4Address(b)<<8 | IPv4Address(a)
 }
 
 // ArrayToIPv4 converts four element array to uint32 representation
-func ArrayToIPv4(a [IPv4AddrLen]byte) uint32 {
-	return uint32(a[3])<<24 | uint32(a[2])<<16 | uint32(a[1])<<8 | uint32(a[0])
+func ArrayToIPv4(a [IPv4AddrLen]byte) IPv4Address {
+	return IPv4Address(a[3])<<24 | IPv4Address(a[2])<<16 | IPv4Address(a[1])<<8 | IPv4Address(a[0])
 }
 
 // IPv4ToBytes converts four element address to uint32 representation
-func IPv4ToBytes(v uint32) [IPv4AddrLen]byte {
+func IPv4ToBytes(v IPv4Address) [IPv4AddrLen]byte {
 	return [IPv4AddrLen]uint8{byte(v), byte(v >> 8), byte(v >> 16), byte(v >> 24)}
 }
 

@@ -396,8 +396,8 @@ func parseRuleResult(rule string) (uint, error) {
 	}
 }
 
-func parseAddr4(addr *net.IPNet) (uint32, uint32) {
-	return binary.LittleEndian.Uint32(addr.IP), binary.LittleEndian.Uint32(addr.Mask)
+func parseAddr4(addr *net.IPNet) (IPv4Address, IPv4Address) {
+	return IPv4Address(binary.LittleEndian.Uint32(addr.IP)), IPv4Address(binary.LittleEndian.Uint32(addr.Mask))
 }
 
 func parseAddr6(addr *net.IPNet) ([16]uint8, [16]uint8) {
@@ -431,10 +431,10 @@ type l4Rules struct {
 
 type l3Rules4 struct {
 	OutputNumber uint
-	SrcAddr      uint32
-	DstAddr      uint32
-	SrcMask      uint32
-	DstMask      uint32
+	SrcAddr      IPv4Address
+	DstAddr      IPv4Address
+	SrcMask      IPv4Address
+	DstMask      IPv4Address
 	L4           l4Rules
 }
 

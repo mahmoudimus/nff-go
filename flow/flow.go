@@ -43,7 +43,7 @@ import (
 
 var openFlowsNumber = uint32(0)
 var createdPorts []port
-var portPair map[uint32](*port)
+var portPair map[packet.IPv4Address](*port)
 var schedState *scheduler
 var vEach [10][burstSize]uint8
 
@@ -549,7 +549,7 @@ func SystemInit(args *Config) error {
 			createdPorts[i].InIndex = maxInIndex
 		}
 	}
-	portPair = make(map[uint32](*port))
+	portPair = make(map[packet.IPv4Address](*port))
 	// Init scheduler
 	common.LogTitle(common.Initialization, "------------***------ Initializing scheduler -----***------------")
 	StopRing := low.CreateRings(burstSize*sizeMultiplier, maxInIndex)
@@ -995,7 +995,7 @@ func GetNameByPort(port uint16) (string, error) {
 
 // SetIPForPort sets IP for specified port if it was created. Not thread safe.
 // Return error if requested port isn't exist or wasn't previously requested.
-func SetIPForPort(port uint16, ip uint32) error {
+func SetIPForPort(port uint16, ip packet.IPv4Address) error {
 	for i := range createdPorts {
 		if createdPorts[i].port == port && createdPorts[i].wasRequested {
 			portPair[ip] = &createdPorts[i]
