@@ -5,6 +5,7 @@
 package lb
 
 import (
+	"crypto/sha256"
 	"fmt"
 
 	"github.com/intel-go/nff-go/common"
@@ -15,6 +16,7 @@ import (
 func balancer(pkt *packet.Packet, ctx flow.UserContext) bool {
 	pkt.ParseL3()
 	originalProtocol := pkt.Ether.EtherType
+	var worker int
 
 	// Check packet protocol number
 	if originalProtocol == common.SwapARPNumber {
@@ -31,6 +33,7 @@ func balancer(pkt *packet.Packet, ctx flow.UserContext) bool {
 				"it is targeted at address", ipv4.DstAddr.String(), "instead. Packet dropped.")
 			return false
 		}
+		worker = findWorkerIndexIPv4(pkt, ipv4)
 	} else if originalProtocol == common.SwapIPV6Number {
 		ipv6 := pkt.GetIPv6NoCheck()
 		if !LBConfig.TunnelSubnet.IPv6.CheckIPv6AddressWithinSubnet(ipv6.DstAddr) {
@@ -39,11 +42,11 @@ func balancer(pkt *packet.Packet, ctx flow.UserContext) bool {
 				"it is targeted at address", ipv6.DstAddr.String(), "instead. Packet dropped.")
 			return false
 		}
+		worker = findWorkerIndexIPv6(pkt, ipv6)
 	} else {
 		return false
 	}
 
-	worker := findWorkerIndex(pkt)
 	workerIP := LBConfig.WorkerAddresses[worker]
 	workerMAC, found := LBConfig.TunnelPort.neighCache.LookupMACForIPv4(workerIP)
 	if !found {
@@ -89,6 +92,72 @@ func balancer(pkt *packet.Packet, ctx flow.UserContext) bool {
 	return true
 }
 
-func findWorkerIndex(pkt *packet.Packet) int {
-	return 0
+func findWorkerIndexIPv4(pkt *packet.Packet, ipv4 *packet.IPv4Hdr) int {
+	pkt.ParseL4ForIPv4()
+	hash := sha256.New()
+	sa := packet.IPv4ToBytes(ipv4.SrcAddr)
+	hash.Write(sa[:])
+	protocol := ipv4.NextProtoID
+	switch protocol {
+	case common.TCPNumber:
+		tcp := pkt.GetTCPNoCheck()
+		sp, dp := portsToByteSlices(tcp.SrcPort, tcp.DstPort)
+		hash.Write(sp)
+		hash.Write(dp)
+	case common.UDPNumber:
+		udp := pkt.GetUDPNoCheck()
+		sp, dp := portsToByteSlices(udp.SrcPort, udp.DstPort)
+		hash.Write(sp)
+		hash.Write(dp)
+	case common.ICMPNumber:
+		icmp := pkt.GetICMPNoCheck()
+		id, _ := portsToByteSlices(icmp.Identifier, icmp.SeqNum)
+		hash.Write(id)
+	}
+	hash.Write([]byte{protocol})
+	da := packet.IPv4ToBytes(ipv4.DstAddr)
+	hash.Write(da[:])
+
+	sum := hash.Sum(nil)
+	return int(sum[0]) % len(LBConfig.WorkerAddresses)
+}
+
+func findWorkerIndexIPv6(pkt *packet.Packet, ipv6 *packet.IPv6Hdr) int {
+	pkt.ParseL4ForIPv6()
+	hash := sha256.New()
+	sa := ipv6.SrcAddr
+	hash.Write(sa[:])
+	protocol := ipv6.Proto
+	switch protocol {
+	case common.TCPNumber:
+		tcp := pkt.GetTCPNoCheck()
+		sp, dp := portsToByteSlices(tcp.SrcPort, tcp.DstPort)
+		hash.Write(sp)
+		hash.Write(dp)
+	case common.UDPNumber:
+		udp := pkt.GetUDPNoCheck()
+		sp, dp := portsToByteSlices(udp.SrcPort, udp.DstPort)
+		hash.Write(sp)
+		hash.Write(dp)
+	case common.ICMPv6Number:
+		icmp := pkt.GetICMPNoCheck()
+		id, _ := portsToByteSlices(icmp.Identifier, icmp.SeqNum)
+		hash.Write(id)
+	}
+	hash.Write([]byte{protocol})
+	da := ipv6.DstAddr
+	hash.Write(da[:])
+
+	sum := hash.Sum(nil)
+	return int(sum[0]) % len(LBConfig.WorkerAddresses)
+}
+
+func portsToByteSlices(p1, p2 uint16) ([]byte, []byte) {
+	a1 := make([]byte, 2)
+	a1[0] = byte(p1 >> 8)
+	a1[1] = byte(p1)
+	a2 := make([]byte, 2)
+	a2[0] = byte(p2 >> 8)
+	a2[1] = byte(p2)
+	return a1, a2
 }
